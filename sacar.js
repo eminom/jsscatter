@@ -4,10 +4,11 @@ const util = require('util');
 const fs = require('fs');
 const cp = require('coap-packet');
 const crypto = require('crypto');
-const dgram = require('dgram');
 const coap = require('./coapdefs');
 const path = require('path');
 const mkdirp = require('mkdirp');
+
+const adapter = require('./adapter');
 
 let fatalLog = console.error;
 let traceLog = console.error;
@@ -18,9 +19,8 @@ let debugLog = function () { };
 let outd = 'out';
 
 class Messenger {
-    constructor(host, port) {
-        let usock = dgram.createSocket('udp4');
-        usock.on('message', (msg, rinfo) => {
+    constructor(usock, host, port) {
+        usock.on('message', (msg) => {
             let resp = cp.parse(msg);
             switch (getTypeOfResp(resp)) {
                 case coap.Acknowledgement:
@@ -44,6 +44,7 @@ class Messenger {
             usock.send(resChunk, port, host, (err) => {
                 if (err) {
                     fatalLog("Error:", err);
+                    process.exit(5);
                     return;
                 }
             });
@@ -75,6 +76,7 @@ class Messenger {
                     warnLog("timeout");
                     delete this._msgMap[this._getSig(that)];
                     this._reqs.splice(i, 1);
+                    process.exit(1);
                     continue;
                 }
                 warnLog("resent one");
@@ -97,7 +99,7 @@ class Messenger {
             req.token = crypto.randomBytes(8);
             sig = this._getSig(req);
             if (this._msgMap.hasOwnProperty(sig)) {
-                fatalLog("critical error!!!!");
+                warnLog("critical error!!!!");
             } else {
                 break;
             }
@@ -203,8 +205,8 @@ function getTypeOfResp(resp) {
 }
 
 
-function getFile(name, host, port) {
-    let msr = new MessengerEx(host, port);
+function getFile(elSocket, name, host, port) {
+    let msr = new MessengerEx(elSocket, host, port);
     let startTime = new Date();
     return msr.queryForID(name)
         .then((id) => msr.queryForSegs(id))
@@ -240,10 +242,11 @@ function getFile(name, host, port) {
                     ).then(fd => writeToFile(fd, info)
                     ).then(() => verifyFile(tmpName, info.sha256)
                     ).then((ok) => {
-                        traceLog("VERIFY: ", ok);
-                        if (!ok) {
+                        // traceLog("VERIFY: ", ok);
+                        if (ok) {
                             return rename(tmpName, fullpath);
                         }
+                        warnLog("verification failed.");
                         return unlink(tmpName);
                     }).then(() => {
                         return startTime;
@@ -326,10 +329,38 @@ function verifyFile(name, hash) {
 
 // main
 let reqName = "<?>";
-if (typeof (process.argv[2]) === 'string') {
-    reqName = process.argv[2];
+let elHost = "172.16.53.182";
+let elPort = 16666;
+let args = process.argv.reduce((p, v) => {
+    if (/[\w\d\.]+:\d+/.test(v)) {
+        [elHost, elPort] = v.split(":");
+        return p;
+    }
+    if (v !== '-udp') {
+        p.push(v);
+    };
+    return p;
+}, []);
+// console.log("Host: ", elHost);
+// console.log("Port: ", elPort);
+// console.log("<", args, ">");
+if (typeof (args[2]) === 'string') {
+    reqName = args[2];
 }
-getFile(reqName, "mylaptop", 16666).then((s) => {
-    traceLog("time elapsed: ", new Date() - s);
-    process.exit(0);
+let useUDP = process.argv.reduce((p, v) => p |= (v === '-udp'), false);
+let creator = adapter.createAtSocket;
+if (useUDP) {
+    creator = adapter.createUDPSocket;
+    // console.log("using UDP");
+} else {
+    // console.log("using AT");
+}
+creator(
+).then((sock) =>
+    getFile(sock, reqName, elHost, elPort).then((s) => {
+        traceLog("time elapsed: ", new Date() - s);
+        process.exit(0);
+    })
+).catch((e) => {
+    console.error("Any error:", e);
 });
