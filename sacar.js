@@ -2,135 +2,51 @@
 // npm install coap --save
 const util = require('util');
 const fs = require('fs');
-const cp = require('coap-packet');
+
 const crypto = require('crypto');
-const coap = require('./coapdefs');
+
 const path = require('path');
 const mkdirp = require('mkdirp');
 
 const adapter = require('./adapter');
+const Messenger = require('./messenger');
+const coap = require('./coapdefs');
+
 
 let fatalLog = console.error;
 let traceLog = console.error;
 let warnLog = console.error;
 
-let debugLog = function () { };
+//let infoLog = function () { };
+let infoLog = console.log;
 
 let outd = 'out';
-
-class Messenger {
-    constructor(usock, host, port) {
-        usock.on('message', (msg) => {
-            let resp = cp.parse(msg);
-            switch (getTypeOfResp(resp)) {
-                case coap.Acknowledgement:
-                    let sig = this._getSig(resp);
-                    let req = this._msgMap[sig];
-                    if (req) {
-                        setTimeout(() => req.callback(resp), 0);
-                        this._removeFromArray(req);
-                    }
-                    delete this._msgMap[sig];
-                    break;
-                case coap.Confirmable:
-                case coap.NonConfirmable:
-                    throw new Error("not implemented");
-                case coap.Reset:
-                    throw new Error("RESET!");
-            }
-        });
-        let doSend = (req) => {
-            let resChunk = cp.generate(req);
-            usock.send(resChunk, port, host, (err) => {
-                if (err) {
-                    fatalLog("Error:", err);
-                    process.exit(5);
-                    return;
-                }
-            });
-        };
-
-        this._msgMap = {};
-        this.elMsgID = 1000;
-        this._doSend = doSend;
-        this._reqs = [];
-        this._timer = setInterval(() => this._checkBox(), 5000);
-    }
-
-    _removeFromArray(req) {
-        for (let i = 0; i < this._reqs.length; ++i) {
-            if (this._reqs[i] == req) {
-                this._reqs.splice(i, 1);
-                return;
-            }
-        }
-        warnLog("not remove from array ??");
-    }
-
-    _checkBox() {
-        let now = new Date();
-        for (let i = 0; i < this._reqs.length;) {
-            let that = this._reqs[i];
-            if (now - that._lastSent >= 5000) {
-                if (that._sentCount >= 3) {
-                    warnLog("timeout");
-                    delete this._msgMap[this._getSig(that)];
-                    this._reqs.splice(i, 1);
-                    process.exit(1);
-                    continue;
-                }
-                warnLog("resent one");
-                that._sentCount++;
-                this._doSend(that);
-            }
-            ++i;
-        }
-    }
-
-    _getNextMessageID() {
-        this.elMsgID = (1 + this.elMsgID) % 65536;
-        return this.elMsgID;
-    }
-
-    sendReq(req) {
-        let sig = '';
-        while (1) {
-            req.messageId = this._getNextMessageID();
-            req.token = crypto.randomBytes(8);
-            sig = this._getSig(req);
-            if (this._msgMap.hasOwnProperty(sig)) {
-                warnLog("critical error!!!!");
-            } else {
-                break;
-            }
-        }
-        req = coap.NewReq(req);
-        req._lastSent = new Date; // to be sent immediately.
-        req._sentCount = 1;
-        // the same reference.
-        this._msgMap[sig] = req;
-        this._reqs.push(req);
-        this._doSend(req);
-    }
-
-    _getSig(msg) {
-        return msg.token.toString('hex') + ":" + msg.messageId.toString();
-    }
-}
 
 class MessengerEx extends Messenger {
     constructor() {
         super(...Array.from(arguments));
     }
 
-
-    queryForID(name) {
+    queryForID(name, segSize) {
         return new Promise((r, c) => {
             this.sendReq({
                 code: coap.POST,
-                options: [].concat(genUriPaths("rd", "placeholder")),
+                options: [].concat(this.genUriPaths("rd", segSize)),
                 payload: Buffer.from(name),
-                callback: (resp) => r(parseInt(resp.payload)),
+                callback: (resp) => {
+                    infoLog("resp: ", resp.payload.toString());
+                    return r(parseInt(resp.payload));
+                },
+            });
+        });
+    }
+
+    pushClose(id, info) {
+        return new Promise((r, c) => {
+            this.sendReq({
+                code: coap.POST,
+                options: [].concat(this.genUriPaths("done", id)),
+                callback: (resp) => r(info),
             });
         });
     }
@@ -139,7 +55,7 @@ class MessengerEx extends Messenger {
         return new Promise((r, c) => {
             this.sendReq({
                 code: coap.GET,
-                options: [].concat(genUriPaths("f", id, "segs")),
+                options: [].concat(this.genUriPaths("f", id, "segs")),
                 callback: (resp) => r([id, parseInt(resp.payload)]),
             });
         });
@@ -149,7 +65,7 @@ class MessengerEx extends Messenger {
         return new Promise((r, c) => {
             this.sendReq({
                 code: coap.GET,
-                options: [].concat(genUriPaths("f", id, "sha256")),
+                options: [].concat(this.genUriPaths("f", id, "sha256")),
                 callback: (resp) => r([id, segs, resp.payload]),
             })
         });
@@ -166,10 +82,12 @@ class MessengerEx extends Messenger {
                 if (ij >= segs * 2) {
                     whatsleft--;
                     if (whatsleft == 0) {
-                        r({
-                            sha256: hash,
-                            pieces: onePiece,
-                        });
+                        r([id,
+                            {
+                                sha256: hash,
+                                pieces: onePiece,
+                            },
+                        ]);
                     }
                     return;
                 }
@@ -179,7 +97,7 @@ class MessengerEx extends Messenger {
                 // traceLog("requesting for %d/%d", segIdx, p);
                 this.sendReq({
                     code: coap.GET,
-                    options: [].concat(genUriPaths("f", id, segIdx, p)),
+                    options: [].concat(this.genUriPaths("f", id, segIdx, p)),
                     callback: (resp) => {
                         onePiece[segIdx][p] = resp.payload;
                         reqForOne(nextIj);
@@ -193,30 +111,20 @@ class MessengerEx extends Messenger {
     }
 }
 
-function getTypeOfResp(resp) {
-    if (resp.confirmable) {
-        return coap.Confirmable;
-    } else if (resp.reset) {
-        return coap.Reset;
-    } else if (resp.ack) {
-        return coap.Acknowledgement;
-    }
-    return coap.NonConfirmable;
-}
 
-
-function getFile(elSocket, name, host, port) {
+function getFile(elSocket, segSize, name, host, port) {
     let msr = new MessengerEx(elSocket, host, port);
     let startTime = new Date();
-    return msr.queryForID(name)
+    return msr.queryForID(name, segSize)
         .then((id) => msr.queryForSegs(id))
         .then(([id, segs]) => msr.queryForHash(id, segs))
         .then(([id, segs, hash]) => {
-            debugLog("id: ", id);
-            debugLog("segs: ", segs);
-            debugLog("sha256: ", hash.toString('hex'));
-            return msr.queryForContent(id, segs, hash, 4);
-        }).then((info) => {
+            infoLog("id: ", id);
+            infoLog("segs: ", segs);
+            infoLog("sha256: ", hash.toString('hex'));
+            return msr.queryForContent(id, segs, hash, 1);
+        }).then(([id, info]) => msr.pushClose(id, info)
+        ).then((info) => {
             switch (name) {
                 case "<?>":
                     let ob = Buffer.alloc(0);
@@ -254,15 +162,6 @@ function getFile(elSocket, name, host, port) {
             }
             return startTime;
         });
-}
-
-function genUriPaths() {
-    let rv = [];
-    let args = Array.from(arguments);
-    for (let i = 0; i < args.length; ++i) {
-        rv.push({ name: "Uri-Path", value: Buffer.from(args[i].toString()) });
-    }
-    return rv;
 }
 
 function writeToFile(fd, info) {
@@ -327,27 +226,39 @@ function verifyFile(name, hash) {
     });
 }
 
-// main
-let reqName = "<?>";
-let elHost = "172.16.53.182";
-let elPort = 16666;
-let args = process.argv.reduce((p, v) => {
-    if (/[\w\d\.]+:\d+/.test(v)) {
-        [elHost, elPort] = v.split(":");
+function parseArguments() {
+    // main
+    let reqName = "<?>";
+    let elHost = "172.16.53.182";
+    let elPort = 16666;
+    let elss = 512;
+    let args = process.argv.reduce((p, v) => {
+        if (/[\w\d\.]+:\d+/.test(v)) {
+            [elHost, elPort] = v.split(":");
+            return p;
+        }
+        let m = /-f=(\d+)/.exec(v);
+        if (m) {
+            elss = parseInt(m[1]);
+            return p;
+        }
+        if (v !== '-udp') {
+            p.push(v);
+        };
         return p;
+    }, []);
+    // console.log("Host: ", elHost);
+    // console.log("Port: ", elPort);
+    // console.log("<", args, ">");
+    if (typeof (args[2]) === 'string') {
+        reqName = args[2];
     }
-    if (v !== '-udp') {
-        p.push(v);
-    };
-    return p;
-}, []);
-// console.log("Host: ", elHost);
-// console.log("Port: ", elPort);
-// console.log("<", args, ">");
-if (typeof (args[2]) === 'string') {
-    reqName = args[2];
+    let useUDP = process.argv.reduce((p, v) => p |= (v === '-udp'), false);
+    return [reqName, elss, elHost, elPort, useUDP];
 }
-let useUDP = process.argv.reduce((p, v) => p |= (v === '-udp'), false);
+
+[reqName, theSegmentSize, elHost, elPort, useUDP] = parseArguments();
+infoLog("segsize: ", theSegmentSize);
 let creator = adapter.createAtSocket;
 if (useUDP) {
     creator = adapter.createUDPSocket;
@@ -357,7 +268,7 @@ if (useUDP) {
 }
 creator(
 ).then((sock) =>
-    getFile(sock, reqName, elHost, elPort).then((s) => {
+    getFile(sock, theSegmentSize, reqName, elHost, elPort).then((s) => {
         traceLog("time elapsed: ", new Date() - s);
         process.exit(0);
     })
