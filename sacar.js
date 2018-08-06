@@ -115,6 +115,7 @@ class MessengerEx extends Messenger {
 function getFile(elSocket, segSize, name, host, port) {
     let msr = new MessengerEx(elSocket, host, port);
     let startTime = new Date();
+    let timeCost = 0;
     return msr.queryForID(name, segSize)
         .then((id) => msr.queryForSegs(id))
         .then(([id, segs]) => msr.queryForHash(id, segs))
@@ -157,10 +158,13 @@ function getFile(elSocket, segSize, name, host, port) {
                         warnLog("verification failed.");
                         return unlink(tmpName);
                     }).then(() => {
-                        return startTime;
+                        return new Date() - startTime;
                     });
             }
-            return startTime;
+            timeCost = new Date() - startTime;
+            return msr.close();
+        }).then(() => {
+            return timeCost;
         });
 }
 
@@ -267,11 +271,10 @@ if (useUDP) {
     // console.log("using AT");
 }
 creator(
-).then((sock) =>
-    getFile(sock, theSegmentSize, reqName, elHost, elPort).then((s) => {
-        traceLog("time elapsed: ", new Date() - s);
-        process.exit(0);
-    })
-).catch((e) => {
+).then((sock) => getFile(sock, theSegmentSize, reqName, elHost, elPort).then((timeCost) => {
+    traceLog("time elapsed: ", timeCost);
+    console.log("socket closed");
+    process.exit(-1);
+})).catch((e) => {
     console.error("Any error:", e);
 });

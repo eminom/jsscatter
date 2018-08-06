@@ -68,17 +68,19 @@ class MsgEx extends Messenger {
         });
     }
 
-    writeClose(shortID, finSig, cb) {
-        this.sendReq({
-            code: coap.POST,
-            options: [].concat(this.genUriPaths("fin", shortID)),
-            payload: finSig,
-            callback: (resp) => {
-                if (resp.code == coap.Changed) {
-                    infoLog("well done");
-                }
-                cb();
-            },
+    writeClose(shortID, finSig) {
+        return new Promise((r, _) => {
+            this.sendReq({
+                code: coap.POST,
+                options: [].concat(this.genUriPaths("fin", shortID)),
+                payload: finSig,
+                callback: (resp) => {
+                    if (resp.code == coap.Changed) {
+                        infoLog("well done");
+                    }
+                    r();
+                },
+            });
         });
     }
 
@@ -109,9 +111,9 @@ function parseArguments() {
         };
         return p;
     }, []);
-    // console.log("Host: ", elHost);
-    // console.log("Port: ", elPort);
-    // console.log("<", args, ">");
+    // infoLog("Host: ", elHost);
+    // infoLog("Port: ", elPort);
+    // infoLog("<", args, ">");
     if (typeof (args[2]) === 'string') {
         fileName = args[2];
     }
@@ -149,10 +151,9 @@ createFragger(fileName, elss
             doOnce();
         });
     });
-}).then(([shortID, finSig, msr]) => new Promise((r, c) => {
-    msr.writeClose(shortID, finSig, () => r());
-})).then(() => {
-    infoLog("done");
+}).then(([shortID, finSig, msr]) => msr.writeClose(shortID, finSig).then(() => msr.close()
+)).then(() => {
+    infoLog("socket closed");
     process.exit(0);
 }).catch((e) => {
     warnLog(e);

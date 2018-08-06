@@ -43,6 +43,12 @@ class Messenger {
             });
         };
 
+        this.close = () => {
+            return new Promise((r, c) => {
+                usock.close(() => r());
+            });
+        };
+
         this._msgMap = {};
         this.elMsgID = 1000;
         this._doSend = doSend;
