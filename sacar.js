@@ -157,11 +157,11 @@ function getFile(elSocket, segSize, name, host, port) {
                         }
                         warnLog("verification failed.");
                         return unlink(tmpName);
-                    }).then(() => {
-                        return new Date() - startTime;
                     });
             }
+        }).then(() => {
             timeCost = new Date() - startTime;
+            infoLog("closing socket");
             return msr.close();
         }).then(() => {
             return timeCost;
