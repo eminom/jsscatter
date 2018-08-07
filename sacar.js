@@ -99,8 +99,29 @@ class MessengerEx extends Messenger {
                     code: coap.GET,
                     options: [].concat(this.genUriPaths("f", id, segIdx, p)),
                     callback: (resp) => {
-                        onePiece[segIdx][p] = resp.payload;
-                        reqForOne(nextIj);
+                        let buf = resp.payload;
+                        if ((() => {
+                            if (0 == p && Buffer.isBuffer(buf) && buf.length == 24) {
+                                let s1 = crypto.createHash('sha1');
+                                if (0 == Buffer.compare(s1.update(buf.slice(0, 18)).digest().slice(0, 6), buf.slice(18))) {
+                                    return true;
+                                }
+                            } else if (1 == p && Buffer.isBuffer(buf)) {
+                                let m1 = crypto.createHash('md5').update(buf);
+                                if (0 == Buffer.compare(m1.digest(), onePiece[segIdx][0].slice(0, 16))) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        })()) {
+                            onePiece[segIdx][p] = resp.payload;
+                            reqForOne(nextIj);
+                            // console.log("for next:", nextIj);
+                        } else {
+                            // Again.
+                            console.log("failed for piece: %d (%d)", segIdx, p);
+                            reqForOne(ij);
+                        }
                     },
                 });
             };
