@@ -9,13 +9,22 @@
 
 const dgram = require('dgram');
 const createAtSocket = require('athandler').createElSock;
+
 const vmSocket = require('athandler').atSocketv2;
+const vmSocketG = require('athandler').atSocketG;
+const detectDev = require('athandler').detectDev;
 
 module.exports = {
     createUDPSocket,
-    createAtSocket: () => {
-        return createAtSocket(vmSocket);
-    },
+    createAtSocket: () => detectDev().then((model) => {
+        if (model === 'variant') {
+            console.log("variant interface");
+            return createAtSocket(vmSocketG);
+        } else {
+            console.log("hisi interface");
+            return createAtSocket(vmSocket);
+        }
+    }),
 };
 
 function createUDPSocket() {
@@ -23,5 +32,6 @@ function createUDPSocket() {
         setTimeout(() => r(dgram.createSocket('udp4')), 0);
     });
 }
+
 
 ```
