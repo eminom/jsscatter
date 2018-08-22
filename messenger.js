@@ -32,8 +32,12 @@ class Messenger {
                     throw new Error("RESET!");
             }
         });
+
+        this.sendCount = 0;
+        this.resendCount = 0;
         let doSend = (req) => {
             let resChunk = cp.generate(req);
+            this.sendCount++;
             usock.send(resChunk, port, host, (err) => {
                 if (err) {
                     fatalLog("Error:", err);
@@ -78,7 +82,8 @@ class Messenger {
                     process.exit(1);
                     continue;
                 }
-                warnLog("resent one");
+                //warnLog("resent one");
+                this.resendCount++; // full scope
                 that._sentCount++;
                 this._doSend(that);
             }
@@ -123,6 +128,12 @@ class Messenger {
             rv.push({ name: "Uri-Path", value: Buffer.from(args[i].toString()) });
         }
         return rv;
+    }
+
+
+    doReport() {
+        infoLog("send (" + this.sendCount.toString() + ") in all");
+        infoLog("resend (" + this.resendCount.toString() + ")");
     }
 
 }

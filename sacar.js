@@ -137,6 +137,7 @@ function getFile(elSocket, segSize, name, host, port) {
     let msr = new MessengerEx(elSocket, host, port);
     let startTime = new Date();
     let timeCost = 0;
+    let totalLength = 0;
     return msr.queryForID(name, segSize)
         .then((id) => msr.queryForSegs(id))
         .then(([id, segs]) => msr.queryForHash(id, segs))
@@ -157,10 +158,14 @@ function getFile(elSocket, segSize, name, host, port) {
                         warnLog("recv: ", hashed);
                         warnLog("expected: ", info.sha256.toString('hex'));
                     } else {
+                        totalLength = content.length;
                         process.stdout.write(content);
                     }
                     break;
                 default:
+                    for (let i = 0; i < info.pieces.length; ++i) {
+                        totalLength += info.pieces[i][1].length; // buffer size
+                    }
                     let fullpath = path.join(outd, name);
                     let tmpName = fullpath + ".sacartmp";
                     let mkdir = util.promisify(mkdirp);
@@ -183,9 +188,10 @@ function getFile(elSocket, segSize, name, host, port) {
         }).then(() => {
             timeCost = new Date() - startTime;
             infoLog("closing socket");
+            msr.doReport();
             return msr.close();
         }).then(() => {
-            return timeCost;
+            return [timeCost, totalLength];
         });
 }
 
@@ -292,8 +298,10 @@ if (useUDP) {
     // console.log("using AT");
 }
 creator(
-).then((sock) => getFile(sock, theSegmentSize, reqName, elHost, elPort).then((timeCost) => {
-    traceLog("time elapsed: ", timeCost);
+).then((sock) => getFile(sock, theSegmentSize, reqName, elHost, elPort).then(([timeCost, bytesTransferred]) => {
+    traceLog("%d ms elapsed", timeCost);
+    traceLog("%d byte(s) transferred.", bytesTransferred);
+    traceLog("%d bytes per second.", Math.floor(bytesTransferred / timeCost * 1000));
     console.log("socket closed");
     process.exit(-1);
 })).catch((e) => {
